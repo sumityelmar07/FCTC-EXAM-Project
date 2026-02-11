@@ -271,38 +271,37 @@ def debug_prn_matching():
         debug_info = {}
         
         try:
-            # Read and analyze FCTC file
-            import pandas as pd
-            fctc_df_raw = pd.read_excel(fctc_path)
-            debug_info['fctc_columns'] = list(fctc_df_raw.columns)
-            debug_info['fctc_row_count'] = len(fctc_df_raw)
+            # Read and analyze FCTC file using openpyxl
+            data_rows, headers = processor._read_excel_with_header_detection(fctc_path)
+            debug_info['fctc_columns'] = headers
+            debug_info['fctc_row_count'] = len(data_rows)
             
             # Try to extract FCTC data
-            fctc_df = processor._extract_fctc_data(fctc_df_raw)
-            debug_info['fctc_extracted_count'] = len(fctc_df)
-            debug_info['fctc_sample_prns'] = fctc_df['PRN_CLEAN'].head(5).tolist()
+            fctc_data = processor._extract_fctc_data(data_rows, headers)
+            debug_info['fctc_extracted_count'] = len(fctc_data)
+            debug_info['fctc_sample_prns'] = [record['PRN_CLEAN'] for record in fctc_data[:5]]
             
         except Exception as e:
             debug_info['fctc_error'] = str(e)
         
         try:
-            # Read and analyze Roll Call file
-            roll_call_df_raw = pd.read_excel(roll_call_path)
-            debug_info['roll_call_columns'] = list(roll_call_df_raw.columns)
-            debug_info['roll_call_row_count'] = len(roll_call_df_raw)
+            # Read and analyze Roll Call file using openpyxl
+            data_rows, headers = processor._read_excel_with_header_detection(roll_call_path)
+            debug_info['roll_call_columns'] = headers
+            debug_info['roll_call_row_count'] = len(data_rows)
             
             # Try to extract Roll Call data
-            roll_call_df = processor._extract_roll_call_data(roll_call_df_raw)
-            debug_info['roll_call_extracted_count'] = len(roll_call_df)
-            debug_info['roll_call_sample_prns'] = roll_call_df['PRN_CLEAN'].head(5).tolist()
+            roll_call_data = processor._extract_roll_call_data(data_rows, headers)
+            debug_info['roll_call_extracted_count'] = len(roll_call_data)
+            debug_info['roll_call_sample_prns'] = [record['PRN_CLEAN'] for record in roll_call_data[:5]]
             
         except Exception as e:
             debug_info['roll_call_error'] = str(e)
         
         # Compare PRNs if both extractions succeeded
         if 'fctc_sample_prns' in debug_info and 'roll_call_sample_prns' in debug_info:
-            fctc_prns = set(fctc_df['PRN_CLEAN'].tolist())
-            roll_call_prns = set(roll_call_df['PRN_CLEAN'].tolist())
+            fctc_prns = {record['PRN_CLEAN'] for record in fctc_data}
+            roll_call_prns = {record['PRN_CLEAN'] for record in roll_call_data}
             matches = fctc_prns.intersection(roll_call_prns)
             
             debug_info['fctc_unique_prns'] = len(fctc_prns)

@@ -16,7 +16,7 @@ def validate_file_extension(filename, allowed_extensions):
 def validate_excel_file(file_path):
     """Validate Excel file exists and is readable"""
     try:
-        import pandas as pd
+        import openpyxl
         
         if not os.path.exists(file_path):
             raise ValueError(f"File does not exist: {file_path}")
@@ -25,9 +25,19 @@ def validate_excel_file(file_path):
             raise ValueError("File is empty")
         
         # Try to read the file to ensure it's a valid Excel file
-        df = pd.read_excel(file_path)
+        workbook = openpyxl.load_workbook(file_path, data_only=True)
+        sheet = workbook.active
         
-        if df.empty:
+        # Check if there's any data
+        has_data = False
+        for row in sheet.iter_rows(max_row=10, values_only=True):
+            if any(cell is not None for cell in row):
+                has_data = True
+                break
+        
+        workbook.close()
+        
+        if not has_data:
             raise ValueError("Excel file contains no data")
         
         return True, "File is valid"
