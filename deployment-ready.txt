@@ -1,0 +1,2 @@
+FCTC Tool - Ready for Vercel Deployment
+All fixes applied for successful deployment
