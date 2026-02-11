@@ -3,7 +3,7 @@
   "builds": [
     {
       "src": "api/index.py",
-      "use": "@vercel/python@4.3.1"
+      "use": "@vercel/python@4.1.0"
     }
   ],
   "routes": [
@@ -12,7 +12,9 @@
       "dest": "/api/index.py"
     }
   ],
-  "env": {
-    "PYTHONPATH": "/var/task"
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.11"
+    }
   }
 }
