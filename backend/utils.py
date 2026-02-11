@@ -14,94 +14,37 @@ def validate_file_extension(filename, allowed_extensions):
     return extension in allowed_extensions
 
 def validate_excel_file(file_path):
-    """Validate Excel file exists and is readable with multiple fallback methods"""
+    """Validate Excel file exists and is readable"""
     try:
+        import openpyxl
+        
         if not os.path.exists(file_path):
             raise ValueError(f"File does not exist: {file_path}")
         
         if os.path.getsize(file_path) == 0:
             raise ValueError("File is empty")
         
-        # Method 1: Try with pandas (most robust)
-        try:
-            import pandas as pd
-            df = pd.read_excel(file_path, nrows=5)  # Just read first 5 rows for validation
-            if df.empty:
-                raise ValueError("Excel file contains no data")
-            return True, "File is valid (pandas)"
-            
-        except Exception as e1:
-            # Method 2: Try with openpyxl (data_only=True)
-            try:
-                import openpyxl
-                workbook = openpyxl.load_workbook(file_path, data_only=True)
-                sheet = workbook.active
-                
-                # Check if there's any data
-                has_data = False
-                for row in sheet.iter_rows(max_row=10, values_only=True):
-                    if any(cell is not None for cell in row):
-                        has_data = True
-                        break
-                
-                workbook.close()
-                
-                if not has_data:
-                    raise ValueError("Excel file contains no data")
-                
-                return True, "File is valid (openpyxl)"
-                
-            except Exception as e2:
-                # Method 3: Try with openpyxl (data_only=False)
-                try:
-                    workbook = openpyxl.load_workbook(file_path, data_only=False)
-                    sheet = workbook.active
-                    
-                    # Check if there's any data
-                    has_data = False
-                    for row in sheet.iter_rows(max_row=10, values_only=True):
-                        if any(cell is not None for cell in row):
-                            has_data = True
-                            break
-                    
-                    workbook.close()
-                    
-                    if not has_data:
-                        raise ValueError("Excel file contains no data")
-                    
-                    return True, "File is valid (openpyxl compatibility mode)"
-                    
-                except Exception as e3:
-                    # Method 4: Check if it's at least a valid zip file (Excel format)
-                    try:
-                        import zipfile
-                        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                            # If we can read it as zip, it's likely an Excel file
-                            file_list = zip_ref.namelist()
-                            # Check for typical Excel file structure
-                            if any('xl/' in f for f in file_list):
-                                return True, "File appears to be Excel format (may have formatting issues but readable)"
-                        
-                        raise ValueError("Not a valid Excel file format")
-                        
-                    except zipfile.BadZipFile:
-                        raise ValueError("File is not a valid Excel file")
-                    except Exception as e4:
-                        raise ValueError(f"Unable to validate Excel file: {str(e4)}")
+        # Try to read the file to ensure it's a valid Excel file
+        workbook = openpyxl.load_workbook(file_path, data_only=True)
+        sheet = workbook.active
+        
+        # Check if there's any data
+        has_data = False
+        for row in sheet.iter_rows(max_row=10, values_only=True):
+            if any(cell is not None for cell in row):
+                has_data = True
+                break
+        
+        workbook.close()
+        
+        if not has_data:
+            raise ValueError("Excel file contains no data")
+        
+        return True, "File is valid"
         
     except Exception as e:
         logger.error(f"Excel file validation failed for {file_path}: {str(e)}")
-        
-        # Provide user-friendly error messages
-        error_msg = str(e)
-        if "invalid XML" in error_msg or "could not read worksheets" in error_msg:
-            return False, ("Excel file has formatting issues but may still be readable. "
-                          "The system will attempt multiple methods to process it. "
-                          f"Technical details: {error_msg}")
-        elif "BadZipFile" in error_msg or "not a valid Excel file" in error_msg:
-            return False, "File is not a valid Excel file. Please ensure you're uploading a .xlsx or .xls file."
-        else:
-            return False, f"File validation issue: {error_msg}"
+        return False, f"Invalid Excel file: {str(e)}"
 
 def validate_required_columns(df, required_columns, file_type="file"):
     """Validate that DataFrame contains required columns"""

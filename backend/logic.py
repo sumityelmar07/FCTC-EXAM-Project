@@ -84,7 +84,6 @@ class ExamProcessor:
             # Method 2: Try with openpyxl (data_only=True)
             try:
                 print("📖 Method 2: Trying openpyxl (data_only=True)...")
-                import openpyxl
                 
                 workbook = openpyxl.load_workbook(file_path, data_only=True)
                 sheet = workbook.active
@@ -159,7 +158,6 @@ class ExamProcessor:
                     # Method 4: Try with xlrd for older Excel files
                     try:
                         print("📖 Method 4: Trying xlrd...")
-                        import xlrd
                         import pandas as pd
                         
                         # Try reading as .xls file
@@ -228,14 +226,14 @@ class ExamProcessor:
                             
                             # All methods failed - provide comprehensive error message
                             error_details = f"""
-All Excel reading methods failed:
-- Method 1 (pandas): {str(e1)}
-- Method 2 (openpyxl data_only=True): {str(e2)}
-- Method 3 (openpyxl data_only=False): {str(e3)}
-- Method 4 (xlrd): {str(e4)}
-- Method 5 (read_only): {str(e5)}
+❌ All Excel reading methods failed:
+• Method 1 (pandas): {str(e1)}
+• Method 2 (openpyxl data_only=True): {str(e2)}
+• Method 3 (openpyxl data_only=False): {str(e3)}
+• Method 4 (xlrd): {str(e4)}
+• Method 5 (read_only): {str(e5)}
 
-The Excel file appears to have severe formatting issues. Please try:
+🔧 The Excel file appears to have severe formatting issues. Please try:
 1. Opening the file in Microsoft Excel
 2. Selecting all data (Ctrl+A)
 3. Copying it (Ctrl+C)
