@@ -209,8 +209,7 @@ def process_files():
             'attendance_report': result.get('attendance_report', []),
             'summary': result.get('reports', {}).get('summary', ''),
             'download_data': {
-                'attendance_report_csv': _generate_csv_content(result.get('attendance_report', [])),
-                'attendance_report_json': result.get('attendance_report', [])
+                'attendance_report_csv': _generate_csv_content(result.get('attendance_report', []))
             }
         }
         

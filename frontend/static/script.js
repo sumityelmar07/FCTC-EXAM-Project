@@ -227,12 +227,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         btoa(data.download_data.attendance_report_csv) + '\')">📄 Download CSV Report</button>';
             }
             
-            // JSON Download Button  
-            if (data.download_data.attendance_report_json) {
-                html += '<button class="download-btn json-btn" onclick="downloadJSON(\'' + 
-                        btoa(JSON.stringify(data.download_data.attendance_report_json)) + '\')">📋 Download JSON Report</button>';
-            }
-            
             // View Data Button
             if (data.attendance_report && data.attendance_report.length > 0) {
                 html += '<button class="download-btn view-btn" onclick="viewAttendanceData(\'' + 
@@ -395,28 +389,6 @@ function downloadCSV(base64Data) {
     } catch (error) {
         console.error('Error downloading CSV:', error);
         alert('Error downloading CSV file. Please try again.');
-    }
-}
-
-function downloadJSON(base64Data) {
-    try {
-        const jsonContent = atob(base64Data);
-        const blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8;' });
-        const link = document.createElement('a');
-        
-        if (link.download !== undefined) {
-            const url = URL.createObjectURL(blob);
-            link.setAttribute('href', url);
-            link.setAttribute('download', 'attendance_report.json');
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
-        }
-    } catch (error) {
-        console.error('Error downloading JSON:', error);
-        alert('Error downloading JSON file. Please try again.');
     }
 }
 
