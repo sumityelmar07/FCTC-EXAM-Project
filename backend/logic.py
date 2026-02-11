@@ -43,40 +43,161 @@ class ExamProcessor:
     
     def _read_excel_with_header_detection(self, file_path: str) -> Tuple[List[List], List[str]]:
         """
-        Read Excel file and detect header row automatically
+        Read Excel file and detect header row automatically with multiple fallback methods
         Returns: (data_rows, header_row)
         """
         try:
-            workbook = openpyxl.load_workbook(file_path, data_only=True)
-            sheet = workbook.active
-            
-            # Get all rows as lists
-            all_rows = []
-            for row in sheet.iter_rows(values_only=True):
-                if any(cell is not None for cell in row):  # Skip completely empty rows
-                    all_rows.append(list(row))
-            
-            if not all_rows:
-                raise Exception("Excel file is empty")
-            
-            # Find header row (look for row with most non-empty string values)
-            header_row_idx = 0
-            max_string_count = 0
-            
-            for i, row in enumerate(all_rows[:10]):  # Check first 10 rows
-                string_count = sum(1 for cell in row if isinstance(cell, str) and cell.strip())
-                if string_count > max_string_count:
-                    max_string_count = string_count
-                    header_row_idx = i
-            
-            headers = [str(cell).strip() if cell is not None else "" for cell in all_rows[header_row_idx]]
-            data_rows = all_rows[header_row_idx + 1:]
-            
-            workbook.close()
-            return data_rows, headers
+            # Method 1: Try with openpyxl (data_only=True)
+            try:
+                workbook = openpyxl.load_workbook(file_path, data_only=True)
+                sheet = workbook.active
+                
+                # Get all rows as lists
+                all_rows = []
+                for row in sheet.iter_rows(values_only=True):
+                    if any(cell is not None for cell in row):  # Skip completely empty rows
+                        all_rows.append(list(row))
+                
+                workbook.close()
+                
+                if not all_rows:
+                    raise Exception("Excel file is empty")
+                
+                # Find header row (look for row with most non-empty string values)
+                header_row_idx = 0
+                max_string_count = 0
+                
+                for i, row in enumerate(all_rows[:10]):  # Check first 10 rows
+                    string_count = sum(1 for cell in row if isinstance(cell, str) and cell.strip())
+                    if string_count > max_string_count:
+                        max_string_count = string_count
+                        header_row_idx = i
+                
+                headers = [str(cell).strip() if cell is not None else "" for cell in all_rows[header_row_idx]]
+                data_rows = all_rows[header_row_idx + 1:]
+                
+                return data_rows, headers
+                
+            except Exception as e1:
+                print(f"Method 1 failed: {str(e1)}")
+                
+                # Method 2: Try with openpyxl (data_only=False)
+                try:
+                    workbook = openpyxl.load_workbook(file_path, data_only=False)
+                    sheet = workbook.active
+                    
+                    # Get all rows as lists
+                    all_rows = []
+                    for row in sheet.iter_rows(values_only=True):
+                        if any(cell is not None for cell in row):
+                            all_rows.append(list(row))
+                    
+                    workbook.close()
+                    
+                    if not all_rows:
+                        raise Exception("Excel file is empty")
+                    
+                    # Find header row
+                    header_row_idx = 0
+                    max_string_count = 0
+                    
+                    for i, row in enumerate(all_rows[:10]):
+                        string_count = sum(1 for cell in row if isinstance(cell, str) and cell.strip())
+                        if string_count > max_string_count:
+                            max_string_count = string_count
+                            header_row_idx = i
+                    
+                    headers = [str(cell).strip() if cell is not None else "" for cell in all_rows[header_row_idx]]
+                    data_rows = all_rows[header_row_idx + 1:]
+                    
+                    return data_rows, headers
+                    
+                except Exception as e2:
+                    print(f"Method 2 failed: {str(e2)}")
+                    
+                    # Method 3: Try reading only values without workbook object
+                    try:
+                        from openpyxl import load_workbook
+                        import tempfile
+                        import shutil
+                        
+                        # Create a temporary copy to avoid file locks
+                        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp_file:
+                            shutil.copy2(file_path, tmp_file.name)
+                            tmp_path = tmp_file.name
+                        
+                        try:
+                            wb = load_workbook(tmp_path, read_only=True, data_only=True)
+                            ws = wb.active
+                            
+                            all_rows = []
+                            for row in ws.iter_rows(values_only=True):
+                                if any(cell is not None for cell in row):
+                                    all_rows.append(list(row))
+                            
+                            wb.close()
+                            
+                            if not all_rows:
+                                raise Exception("Excel file is empty")
+                            
+                            # Find header row
+                            header_row_idx = 0
+                            max_string_count = 0
+                            
+                            for i, row in enumerate(all_rows[:10]):
+                                string_count = sum(1 for cell in row if isinstance(cell, str) and cell.strip())
+                                if string_count > max_string_count:
+                                    max_string_count = string_count
+                                    header_row_idx = i
+                            
+                            headers = [str(cell).strip() if cell is not None else "" for cell in all_rows[header_row_idx]]
+                            data_rows = all_rows[header_row_idx + 1:]
+                            
+                            return data_rows, headers
+                            
+                        finally:
+                            # Clean up temp file
+                            try:
+                                os.unlink(tmp_path)
+                            except:
+                                pass
+                                
+                    except Exception as e3:
+                        print(f"Method 3 failed: {str(e3)}")
+                        
+                        # Method 4: Last resort - try to extract basic data
+                        try:
+                            wb = openpyxl.Workbook()
+                            ws = wb.active
+                            
+                            # Try to read the file in a more basic way
+                            import zipfile
+                            
+                            # Check if it's a valid zip file (Excel files are zip archives)
+                            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                                # If we can read it as zip, it's likely a valid Excel file
+                                # but with some XML issues
+                                pass
+                            
+                            # Return a basic structure to indicate file is readable but has issues
+                            raise Exception("Excel file has XML formatting issues but is readable. Please try saving the file in a different Excel format (xlsx) or contact support.")
+                            
+                        except zipfile.BadZipFile:
+                            raise Exception("File is not a valid Excel file. Please ensure you're uploading a .xlsx or .xls file.")
+                        except Exception as e4:
+                            raise Exception(f"Unable to read Excel file. The file may be corrupted or in an unsupported format. Error details: {str(e4)}")
             
         except Exception as e:
-            raise Exception(f"Error reading Excel file: {str(e)}")
+            # Provide user-friendly error message
+            error_msg = str(e)
+            if "invalid XML" in error_msg or "could not read worksheets" in error_msg:
+                raise Exception("The Excel file has formatting issues. Please try:\n"
+                              "1. Opening the file in Excel and saving it as a new .xlsx file\n"
+                              "2. Copying the data to a new Excel workbook\n"
+                              "3. Ensuring the file is not corrupted\n"
+                              f"Technical details: {error_msg}")
+            else:
+                raise Exception(f"Error reading Excel file: {error_msg}")
     
     def _clean_prn(self, prn_value) -> str:
         """Clean and standardize PRN format"""
