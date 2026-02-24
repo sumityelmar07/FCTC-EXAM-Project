@@ -1,4 +1,4 @@
-# Business logic for FCTC exam automation - PRN-FIRST PIPELINE ONLY
+# Business logic for FCTC exam automation - MULTI-LEVEL MATCHING PIPELINE
 import openpyxl
 import os
 import re
@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple, Optional
 
 class ExamProcessor:
     """
-    PRN-FIRST PIPELINE - EXTRACTS ONLY REQUIRED FIELDS FROM FCTC:
+    MULTI-LEVEL MATCHING PIPELINE - EXTRACTS ONLY REQUIRED FIELDS FROM FCTC:
     
     SATAKAM (FCTC) FILE - REQUIRED FIELDS (extracts only these, ignores all others):
     - "Timestamp"
@@ -28,14 +28,21 @@ class ExamProcessor:
     - "Division"
     (All other columns safely ignored)
     
+    MATCHING STRATEGY (Multi-Level):
+    1. Level 1: PRN matching (primary, most reliable)
+    2. Level 2: Name matching with fuzzy logic (handles typos, 80% similarity threshold)
+    3. Level 3: Roll No + Division matching (unique combination per division)
+    
     RULES:
-    1. PRN is the primary and authoritative identifier
-    2. Roll No is NOT used for matching (included for reference only)
-    3. Division comes ONLY from Roll Call file
-    4. FCTC file: Extract ONLY required fields, ignore all other columns
-    5. Attendance logic: If PRN exists in FCTC → Present, Else → Absent
-    6. Missing critical columns (PRN, Score) = ABORT with clear error
-    7. Missing optional fields = Continue processing with available fields
+    1. Try PRN match first (most reliable)
+    2. If PRN fails, try Name match (handles typos/variations)
+    3. If Name fails, try Roll No + Division match (unique per division)
+    4. Track which method was used for each match
+    5. FCTC file: Extract ONLY required fields, ignore all other columns
+    6. Attendance logic: If matched by any method → Present, Else → Absent
+    7. Missing critical columns (PRN, Score) = ABORT with clear error
+    8. Missing optional fields = Continue processing with available fields
+    9. Output includes "Match_Method" column showing how each student was matched
     """
     
     def __init__(self):
@@ -310,6 +317,65 @@ If none of these solutions work, the original file may be irreparably corrupted.
         
         return prn_clean
     
+    def _clean_name(self, name_value) -> str:
+        """Clean and normalize name for matching"""
+        if name_value is None:
+            return ""
+        
+        name_str = str(name_value).strip().upper()
+        # Remove extra spaces
+        name_str = re.sub(r'\s+', ' ', name_str)
+        # Remove special characters but keep spaces
+        name_str = re.sub(r'[^A-Z\s]', '', name_str)
+        
+        # Filter out invalid values
+        if name_str in ['', 'NAN', 'NONE', 'NAT', 'NULL']:
+            return ""
+        
+        return name_str
+    
+    def _clean_roll_no(self, roll_no_value) -> str:
+        """Clean and normalize roll number"""
+        if roll_no_value is None:
+            return ""
+        
+        roll_str = str(roll_no_value).strip().upper()
+        # Remove decimal points (Excel formatting)
+        roll_str = re.sub(r'\.0+$', '', roll_str)
+        # Remove any non-alphanumeric characters
+        roll_clean = re.sub(r'[^\w]', '', roll_str)
+        
+        # Filter out invalid values
+        if roll_clean in ['', 'NAN', 'NONE', 'NAT', 'NULL']:
+            return ""
+        
+        return roll_clean
+    
+    def _fuzzy_name_match(self, name1: str, name2: str, threshold: float = 0.8) -> bool:
+        """
+        Check if two names match using Jaccard similarity
+        Returns True if similarity >= threshold
+        """
+        if not name1 or not name2:
+            return False
+        
+        # Convert to sets of words
+        set1 = set(name1.split())
+        set2 = set(name2.split())
+        
+        if not set1 or not set2:
+            return False
+        
+        # Calculate Jaccard similarity
+        intersection = len(set1.intersection(set2))
+        union = len(set1.union(set2))
+        
+        if union == 0:
+            return False
+        
+        similarity = intersection / union
+        return similarity >= threshold
+    
     def _extract_fctc_data(self, data_rows: List[List], headers: List[str]) -> List[Dict]:
         """Extract only required fields from FCTC data"""
         
@@ -507,7 +573,8 @@ If none of these solutions work, the original file may be irreparably corrupted.
     
     def process_and_generate_reports(self, fctc_file_path, roll_call_file_path, year):
         """
-        PRN-FIRST PIPELINE: Process files and generate division-wise attendance reports
+        MULTI-LEVEL MATCHING PIPELINE: Process files and generate division-wise attendance reports
+        Matching Priority: 1. PRN → 2. Name (fuzzy) → 3. Roll No + Division
         """
         try:
             # Read and extract data
@@ -519,24 +586,48 @@ If none of these solutions work, the original file may be irreparably corrupted.
             roll_call_data = self.read_roll_call_excel(roll_call_file_path)
             print(f"✅ Roll Call file processed: {len(roll_call_data)} records")
             
-            # Create PRN lookup sets
-            fctc_prns = {record['PRN_CLEAN'] for record in fctc_data}
-            roll_call_prns = {record['PRN_CLEAN'] for record in roll_call_data}
+            # Create multiple lookup dictionaries from FCTC data
+            print("🔍 Creating lookup dictionaries for multi-level matching...")
             
-            print(f"🔍 FCTC unique PRNs: {len(fctc_prns)}")
-            print(f"🔍 Roll Call unique PRNs: {len(roll_call_prns)}")
+            # Level 1: PRN lookup
+            fctc_lookup_by_prn = {}
+            for record in fctc_data:
+                prn = record['PRN_CLEAN']
+                if prn:
+                    fctc_lookup_by_prn[prn] = record
             
-            # Find matches
-            matched_prns = fctc_prns.intersection(roll_call_prns)
-            print(f"✅ Matched PRNs: {len(matched_prns)}")
+            # Level 2: Name lookup (cleaned names)
+            fctc_lookup_by_name = {}
+            for record in fctc_data:
+                name = self._clean_name(record.get('Full_Name', ''))
+                if name:
+                    # Store as list to handle duplicate names
+                    if name not in fctc_lookup_by_name:
+                        fctc_lookup_by_name[name] = []
+                    fctc_lookup_by_name[name].append(record)
             
-            if not matched_prns:
-                raise Exception("❌ No matching PRNs found between FCTC and Roll Call files")
+            # Level 3: Roll No + Division lookup
+            fctc_lookup_by_roll_div = {}
+            for record in fctc_data:
+                roll_no = self._clean_roll_no(record.get('Roll_Number', ''))
+                division = str(record.get('Division', '')).strip().upper()
+                if roll_no and division:
+                    key = f"{roll_no}_{division}"
+                    fctc_lookup_by_roll_div[key] = record
             
-            # Create lookup dictionaries
-            fctc_lookup = {record['PRN_CLEAN']: record for record in fctc_data}
+            print(f"  ✓ PRN lookup: {len(fctc_lookup_by_prn)} entries")
+            print(f"  ✓ Name lookup: {len(fctc_lookup_by_name)} entries")
+            print(f"  ✓ Roll+Div lookup: {len(fctc_lookup_by_roll_div)} entries")
             
-            # Group students by division
+            # Track matching statistics
+            match_stats = {
+                'prn_matches': 0,
+                'name_matches': 0,
+                'roll_div_matches': 0,
+                'no_match': 0
+            }
+            
+            # Group students by division with multi-level matching
             divisions = {}
             for roll_record in roll_call_data:
                 division = str(roll_record.get('Division', 'Unknown')).strip().upper()
@@ -546,16 +637,83 @@ If none of these solutions work, the original file may be irreparably corrupted.
                 if division not in divisions:
                     divisions[division] = []
                 
+                # Multi-level matching
                 prn = roll_record['PRN_CLEAN']
+                roll_name = self._clean_name(roll_record.get('Name', ''))
+                roll_no = self._clean_roll_no(roll_record.get('Roll_No', ''))
                 
-                # Check if student appeared for exam
-                if prn in fctc_lookup:
-                    fctc_record = fctc_lookup[prn]
+                matched_record = None
+                match_method = "Not_Found"
+                
+                # Level 1: Try PRN match
+                if prn and prn in fctc_lookup_by_prn:
+                    matched_record = fctc_lookup_by_prn[prn]
+                    match_method = "PRN"
+                    match_stats['prn_matches'] += 1
+                
+                # Level 2: Try Name match (fuzzy)
+                elif roll_name:
+                    # First try exact name match
+                    if roll_name in fctc_lookup_by_name:
+                        candidates = fctc_lookup_by_name[roll_name]
+                        # If multiple candidates, try to match by division
+                        if len(candidates) == 1:
+                            matched_record = candidates[0]
+                            match_method = "Name"
+                            match_stats['name_matches'] += 1
+                        else:
+                            # Multiple candidates - try to match by division
+                            for candidate in candidates:
+                                cand_div = str(candidate.get('Division', '')).strip().upper()
+                                if cand_div == division:
+                                    matched_record = candidate
+                                    match_method = "Name"
+                                    match_stats['name_matches'] += 1
+                                    break
+                            # If no division match, take first candidate
+                            if not matched_record:
+                                matched_record = candidates[0]
+                                match_method = "Name"
+                                match_stats['name_matches'] += 1
+                    
+                    # If no exact match, try fuzzy matching
+                    if not matched_record:
+                        for fctc_name, candidates in fctc_lookup_by_name.items():
+                            if self._fuzzy_name_match(roll_name, fctc_name):
+                                # Found fuzzy match
+                                if len(candidates) == 1:
+                                    matched_record = candidates[0]
+                                    match_method = "Name"
+                                    match_stats['name_matches'] += 1
+                                    break
+                                else:
+                                    # Multiple candidates - try to match by division
+                                    for candidate in candidates:
+                                        cand_div = str(candidate.get('Division', '')).strip().upper()
+                                        if cand_div == division:
+                                            matched_record = candidate
+                                            match_method = "Name"
+                                            match_stats['name_matches'] += 1
+                                            break
+                                    if matched_record:
+                                        break
+                
+                # Level 3: Try Roll No + Division match
+                if not matched_record and roll_no and division:
+                    key = f"{roll_no}_{division}"
+                    if key in fctc_lookup_by_roll_div:
+                        matched_record = fctc_lookup_by_roll_div[key]
+                        match_method = "Roll_Div"
+                        match_stats['roll_div_matches'] += 1
+                
+                # Determine status and score
+                if matched_record:
                     status = "Present"
-                    score = fctc_record.get('Score', 'N/A')
+                    score = matched_record.get('Score', 'N/A')
                 else:
                     status = "Absent"
                     score = "N/A"
+                    match_stats['no_match'] += 1
                 
                 divisions[division].append({
                     'PRN': roll_record['PRN_RAW'],
@@ -563,10 +721,16 @@ If none of these solutions work, the original file may be irreparably corrupted.
                     'Name': roll_record['Name'],
                     'Division': roll_record['Division'],
                     'Attendance_Status': status,
-                    'Score': score
+                    'Score': score,
+                    'Match_Method': match_method
                 })
             
             print(f"📊 Found {len(divisions)} divisions: {list(divisions.keys())}")
+            print(f"🎯 Matching Statistics:")
+            print(f"  ✓ PRN matches: {match_stats['prn_matches']}")
+            print(f"  ✓ Name matches: {match_stats['name_matches']}")
+            print(f"  ✓ Roll+Div matches: {match_stats['roll_div_matches']}")
+            print(f"  ✗ No match (Absent): {match_stats['no_match']}")
             
             # Generate division-wise reports
             division_reports = {}
@@ -579,22 +743,26 @@ If none of these solutions work, the original file may be irreparably corrupted.
                 }
                 print(f"  📋 Division {division}: {len(students)} students ({division_reports[division]['present_count']} present, {division_reports[division]['absent_count']} absent)")
             
+            # Calculate total matched students
+            total_matched = match_stats['prn_matches'] + match_stats['name_matches'] + match_stats['roll_div_matches']
+            
             # Return results with division-wise data
             result = {
                 'success': True,
-                'matched_students': len(matched_prns),
+                'matched_students': total_matched,
                 'total_roll_call': len(roll_call_data),
                 'total_fctc': len(fctc_data),
                 'divisions': list(divisions.keys()),
                 'division_count': len(divisions),
                 'division_reports': division_reports,
+                'match_stats': match_stats,
                 'reports': {
                     'files_created': [f'attendance_report_division_{div}.csv' for div in divisions.keys()],
-                    'summary': f"Processed {len(matched_prns)} matched students across {len(divisions)} divisions"
+                    'summary': f"Processed {total_matched} matched students across {len(divisions)} divisions using multi-level matching"
                 }
             }
             
             return result
             
         except Exception as e:
-            raise Exception(f"Error in PRN-first processing: {str(e)}")
+            raise Exception(f"Error in multi-level matching processing: {str(e)}")
