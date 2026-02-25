@@ -230,7 +230,7 @@ def process_files():
         
         return jsonify(format_response(
             True,
-            "PRN-first pipeline completed successfully",
+            "PRN-first VIT matching pipeline completed successfully",
             response_data
         )), 200
         

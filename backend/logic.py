@@ -12,21 +12,23 @@ logger = logging.getLogger(__name__)
 
 class ExamProcessor:
     """
-    INTELLIGENT COLLEGE-AWARE MATCHING PIPELINE
+    INTELLIGENT VIT-ONLY MATCHING PIPELINE
+    
+    PLATFORM: Vishwakarma Institute of Technology (VIT) Students Only
     
     ROLL CALL FILE - REQUIRED COLUMNS:
     - "Full name" (MANDATORY for all students)
     - "Roll Number" (MANDATORY for all students)
-    - "PRN" (MANDATORY only for VIT students)
+    - "PRN" (MANDATORY for VIT students)
     - "Division"
     
     FCTC FILE - REQUIRED COLUMNS:
     - "Full name"
-    - "Roll Number"
-    - "PRN" (may be missing for non-VIT students)
+    - "Roll Number" (may be entered incorrectly by students)
+    - "PRN" (primary identifier)
     - "Score"
     
-    INTELLIGENT MATCHING STRATEGY:
+    INTELLIGENT MATCHING STRATEGY (VIT Students):
     
     Step 1: Data Normalization
     - Trim spaces
@@ -35,25 +37,35 @@ class ExamProcessor:
     - Normalize Roll Number
     - Normalize Division
     
-    Step 2: College-Aware Matching
-    IF PRN exists AND student belongs to VIT:
-        Try PRN match first
-    ELSE:
-        Skip PRN matching
+    Step 2: PRN-First Matching (All students are VIT)
+    Priority 1: Match by PRN (primary identifier)
+        - If PRN matches → Mark Present, use exam score
+        - If Roll+Div is different → Use CORRECT roll from Roll Call
+        - Log warning about wrong roll number entry
     
-    After PRN step (or if PRN not applicable):
-    Level 1: Match using Roll Number + Division (Primary universal identifier)
-    Level 2: Exact Full Name match (case-insensitive)
-    Level 3: Fuzzy Full Name match using Jaccard similarity (threshold >= 0.8)
-             Only within same Division
+    Priority 2: If PRN not found → Match by Roll Number + Division
     
-    Step 3: Duplicate Handling
+    Priority 3: If Roll+Div not found → Exact Full Name match (case-insensitive)
+    
+    Priority 4: If Exact Name not found → Fuzzy Full Name match (Jaccard >= 0.8)
+                Only within same Division
+    
+    Priority 5: If nothing matches → Mark as Absent
+    
+    Step 3: Smart Roll Number Correction
+    When PRN matches but Roll+Div is wrong:
+    - Student entered wrong roll number in exam
+    - Use correct roll number from Roll Call file in report
+    - Mark student as Present with their exam score
+    - Log the discrepancy for audit
+    
+    Step 4: Duplicate Handling
     If multiple FCTC entries for same student: Keep highest score
     
-    Step 4: Logging System
-    If PRN mismatch but Roll+Div matched: Log event with details
+    Step 5: Logging System
+    Log all PRN matches with wrong roll numbers for audit trail
     
-    Step 5: Performance
+    Step 6: Performance
     Use lookup dictionaries for O(n + m) time complexity
     """
     
@@ -315,29 +327,24 @@ If none of these solutions work, the original file may be irreparably corrupted.
     def _is_vit_student(self, prn: str, college_name: str = "") -> bool:
         """
         Determine if student belongs to Vishwakarma Institute of Technology
-        Based on PRN pattern or college name
+        Since this platform is VIT-only, any student with a PRN is considered VIT
         """
         if not prn:
             return False
-        
-        # VIT PRN patterns (adjust based on actual patterns)
-        vit_patterns = [
-            r'^VIT',  # Starts with VIT
-            r'^\d{10}$',  # 10-digit numeric PRN
-            r'^[A-Z]\d{9}$',  # Letter followed by 9 digits
-        ]
-        
-        for pattern in vit_patterns:
-            if re.match(pattern, prn):
-                return True
-        
-        # Check college name if available
+
+        # Platform is VIT-only: Any valid PRN is a VIT student
+        # PRN should be alphanumeric and at least 6 characters
+        if len(prn) >= 6 and prn.isalnum():
+            return True
+
+        # Also check college name if available
         if college_name:
             college_upper = college_name.upper()
             if 'VISHWAKARMA' in college_upper or 'VIT' in college_upper:
                 return True
-        
+
         return False
+
     
     def _clean_prn(self, prn_value) -> str:
         """
@@ -349,6 +356,12 @@ If none of these solutions work, the original file may be irreparably corrupted.
         
         # Convert to string and trim
         prn_str = str(prn_value).strip()
+        
+        # DEBUG: Log specific PRN for debugging
+        if '12411007' in prn_str:
+            logger.info(f"🔍 DEBUG _clean_prn: Found PRN containing 12411007")
+            logger.info(f"   Input: '{prn_value}' (type: {type(prn_value)})")
+            logger.info(f"   After str().strip(): '{prn_str}'")
         
         # Remove all decimal points and trailing zeros (Excel formatting)
         # "12413279.0" → "12413279", "123.00" → "123"
@@ -369,6 +382,11 @@ If none of these solutions work, the original file may be irreparably corrupted.
         # Filter out invalid values
         if prn_clean in ['', 'NAN', 'NONE', 'NAT', 'NULL', 'N/A', 'NA']:
             return ""
+        
+        # DEBUG: Log result for specific PRN
+        if '12411007' in str(prn_value):
+            logger.info(f"   Final cleaned PRN: '{prn_clean}'")
+            logger.info(f"   Length: {len(prn_clean)}, Is alphanumeric: {prn_clean.isalnum()}")
         
         return prn_clean
     
@@ -507,6 +525,30 @@ If none of these solutions work, the original file may be irreparably corrupted.
         similarity = intersection / union
         return similarity >= threshold
     
+    def _calculate_name_similarity(self, name1: str, name2: str) -> float:
+        """
+        Calculate name similarity score (0.0 to 1.0) using Jaccard similarity
+        Used for validating PRN matches
+        """
+        if not name1 or not name2:
+            return 0.0
+        
+        # Convert to sets of words
+        set1 = set(name1.split())
+        set2 = set(name2.split())
+        
+        if not set1 or not set2:
+            return 0.0
+        
+        # Calculate Jaccard similarity
+        intersection = len(set1.intersection(set2))
+        union = len(set1.union(set2))
+        
+        if union == 0:
+            return 0.0
+        
+        return intersection / union
+    
     def _extract_fctc_data(self, data_rows: List[List], headers: List[str]) -> List[Dict]:
         """Extract required fields from FCTC data with intelligent column matching"""
         
@@ -625,13 +667,27 @@ If none of these solutions work, the original file may be irreparably corrupted.
         extracted_data = []
         student_records = {}  # Track multiple attempts: key = (roll_no, division), value = best record
         
+        rows_processed = 0
+        rows_skipped = 0
+        
         for row_idx, row in enumerate(data_rows):
             if not any(cell for cell in row):  # Skip empty rows
                 continue
+            
+            rows_processed += 1
                 
             # Ensure row has enough columns
             while len(row) < len(headers):
                 row.append(None)
+            
+            # DEBUG: Check for our target student by PRN
+            prn_check = row[column_indices['prn']] if 'prn' in column_indices and len(row) > column_indices['prn'] else None
+            if prn_check and '12411007' in str(prn_check):
+                logger.info(f"🔍 DEBUG: Found row with PRN 12411007 at row index {row_idx}")
+                logger.info(f"   Full Name (RAW): '{row[column_indices['full_name']] if len(row) > column_indices['full_name'] else 'N/A'}'")
+                logger.info(f"   Roll (RAW): '{row[column_indices['roll_number']] if len(row) > column_indices['roll_number'] else 'N/A'}'")
+                logger.info(f"   Division VIT (RAW): '{row[column_indices['division_vit']] if 'division_vit' in column_indices and len(row) > column_indices['division_vit'] else 'N/A'}'")
+                logger.info(f"   Score (RAW): '{row[column_indices['score']] if len(row) > column_indices['score'] else 'N/A'}'")
             
             # Extract and clean required fields
             full_name_raw = row[column_indices['full_name']] if len(row) > column_indices['full_name'] else None
@@ -642,6 +698,15 @@ If none of these solutions work, the original file may be irreparably corrupted.
             
             # Skip rows without name or roll number
             if not full_name_clean or not roll_no_clean:
+                # DEBUG: Log if this is our target student
+                prn_raw_check = row[column_indices['prn']] if 'prn' in column_indices and len(row) > column_indices['prn'] else None
+                if prn_raw_check and '12411007' in str(prn_raw_check):
+                    logger.warning(f"⚠️ SKIPPING row with PRN 12411007!")
+                    logger.warning(f"   Reason: Missing name or roll number")
+                    logger.warning(f"   Name (RAW): '{full_name_raw}'")
+                    logger.warning(f"   Name (CLEAN): '{full_name_clean}'")
+                    logger.warning(f"   Roll (RAW): '{roll_no_raw}'")
+                    logger.warning(f"   Roll (CLEAN): '{roll_no_clean}'")
                 continue
             
             # Extract PRN (optional)
@@ -694,7 +759,13 @@ If none of these solutions work, the original file may be irreparably corrupted.
                 score = 0.0
             
             # Create unique key for duplicate detection
-            unique_key = f"{roll_no_clean}_{division_clean}" if division_clean else roll_no_clean
+            # Use PRN as primary key if available, otherwise use Roll+Division
+            if prn_clean:
+                unique_key = f"PRN_{prn_clean}"
+            elif division_clean:
+                unique_key = f"{roll_no_clean}_{division_clean}"
+            else:
+                unique_key = roll_no_clean
             
             # Handle multiple attempts - keep highest score
             if unique_key in student_records:
@@ -726,6 +797,23 @@ If none of these solutions work, the original file may be irreparably corrupted.
                 }
         
         # Build final records from best attempts
+        logger.info(f"📊 Building final records from {len(student_records)} unique students (after duplicate handling)")
+        
+        # DEBUG: Check if our target student is in student_records
+        target_key_65 = "65_CSL"
+        if target_key_65 in student_records:
+            logger.info(f"🔍 DEBUG: Found key '{target_key_65}' in student_records")
+            logger.info(f"   PRN: {student_records[target_key_65].get('prn_clean', 'N/A')}")
+            logger.info(f"   Name: {student_records[target_key_65].get('full_name_clean', 'N/A')}")
+        else:
+            logger.warning(f"⚠️ DEBUG: Key '{target_key_65}' NOT in student_records")
+            # Check what keys exist for roll 65
+            keys_with_65 = [k for k in student_records.keys() if k.startswith('65_')]
+            if keys_with_65:
+                logger.info(f"   Keys starting with '65_': {keys_with_65}")
+            else:
+                logger.info(f"   No keys found starting with '65_'")
+        
         for unique_key, data in student_records.items():
             record = {
                 'Full_Name_RAW': data['full_name_raw'],
@@ -886,13 +974,15 @@ If none of these solutions work, the original file may be irreparably corrupted.
     
     def process_and_generate_reports(self, fctc_file_path, roll_call_file_path, year):
         """
-        INTELLIGENT COLLEGE-AWARE MATCHING PIPELINE
+        INTELLIGENT VIT-ONLY MATCHING PIPELINE
         
-        Matching Priority:
-        1. IF VIT student: Try PRN match first
-        2. Roll Number + Division (Primary universal identifier)
+        Matching Priority (All students are VIT):
+        1. PRN match (primary identifier)
+           - If PRN matches but Roll+Div wrong → Use correct roll from Roll Call
+        2. Roll Number + Division (if PRN not found)
         3. Exact Full Name match (case-insensitive)
         4. Fuzzy Full Name match (Jaccard >= 0.8, within same division)
+        5. Mark as Absent (if nothing matches)
         """
         try:
             # Reset mismatch log
@@ -908,19 +998,46 @@ If none of these solutions work, the original file may be irreparably corrupted.
             logger.info(f"✅ Roll Call file processed: {len(roll_call_data)} records")
             
             # Create lookup dictionaries for O(n + m) performance
-            logger.info("🔍 Creating lookup dictionaries for intelligent matching...")
+            logger.info("🔍 Creating lookup dictionaries for VIT student matching...")
             
-            # Level 1: PRN lookup (only for VIT students)
+            # Priority 1: PRN lookup (all students are VIT)
             fctc_lookup_by_prn = {}
             vit_student_count = 0
+            prn_skipped_count = 0
             for record in fctc_data:
                 prn = record['PRN_CLEAN']
                 college = record.get('College_Name', '')
-                if prn and self._is_vit_student(prn, college):
-                    fctc_lookup_by_prn[prn] = record
-                    vit_student_count += 1
+                
+                # DEBUG: Check for our specific student
+                if prn == '12411007':
+                    logger.info(f"🔍 DEBUG: Found PRN 12411007 in fctc_data!")
+                    logger.info(f"   Name: {record.get('Full_Name_CLEAN', 'N/A')}")
+                    logger.info(f"   Roll: {record.get('Roll_Number_CLEAN', 'N/A')}")
+                    logger.info(f"   Division: {record.get('Division_CLEAN', 'N/A')}")
+                    logger.info(f"   College: '{college}'")
+                    logger.info(f"   Is VIT student? {self._is_vit_student(prn, college)}")
+                
+                if prn:
+                    if self._is_vit_student(prn, college):
+                        fctc_lookup_by_prn[prn] = record
+                        vit_student_count += 1
+                        
+                        # DEBUG: Confirm addition
+                        if prn == '12411007':
+                            logger.info(f"   ✅ Added to PRN lookup dictionary!")
+                    else:
+                        prn_skipped_count += 1
+                        # Log first few non-VIT PRNs for debugging
+                        if prn_skipped_count <= 5:
+                            logger.warning(f"⚠️ PRN '{prn}' not recognized as VIT student (College: '{college}')")
+                        
+                        # DEBUG: Check if our student was rejected
+                        if prn == '12411007':
+                            logger.warning(f"   ❌ PRN 12411007 REJECTED as non-VIT student!")
+                else:
+                    prn_skipped_count += 1
             
-            # Level 2: Roll Number + Division lookup (PRIMARY universal identifier)
+            # Priority 2: Roll Number + Division lookup (fallback if PRN not found)
             fctc_lookup_by_roll_div = {}
             for record in fctc_data:
                 roll_no = record['Roll_Number_CLEAN']
@@ -934,7 +1051,7 @@ If none of these solutions work, the original file may be irreparably corrupted.
                     else:
                         fctc_lookup_by_roll_div[key] = record
             
-            # Level 3: Name lookup grouped by Division (for exact and fuzzy matching)
+            # Priority 3: Name lookup grouped by Division (for exact and fuzzy matching)
             fctc_lookup_by_name_div = {}
             for record in fctc_data:
                 name = record['Full_Name_CLEAN']
@@ -945,9 +1062,62 @@ If none of these solutions work, the original file may be irreparably corrupted.
                         fctc_lookup_by_name_div[key] = []
                     fctc_lookup_by_name_div[key].append(record)
             
-            logger.info(f"  ✓ PRN lookup (VIT only): {len(fctc_lookup_by_prn)} entries ({vit_student_count} VIT students)")
-            logger.info(f"  ✓ Roll+Division lookup (PRIMARY): {len(fctc_lookup_by_roll_div)} entries")
-            logger.info(f"  ✓ Name+Division lookup: {len(fctc_lookup_by_name_div)} entries")
+            logger.info(f"  ✓ PRN lookup (Priority 1): {len(fctc_lookup_by_prn)} entries ({vit_student_count} VIT students)")
+            logger.info(f"  ⚠️ PRN skipped (empty or not VIT): {prn_skipped_count}")
+            logger.info(f"  ✓ Roll+Division lookup (Priority 2): {len(fctc_lookup_by_roll_div)} entries")
+            logger.info(f"  ✓ Name+Division lookup (Priority 3): {len(fctc_lookup_by_name_div)} entries")
+            
+            # DEBUG: Search for specific PRN 12411007
+            logger.info("")
+            logger.info("🔍 SEARCHING FOR SPECIFIC STUDENT: PRN=12411007")
+            found_12411007 = False
+            for idx, record in enumerate(fctc_data):
+                if '12411007' in str(record.get('PRN_RAW', '')) or record.get('PRN_CLEAN', '') == '12411007':
+                    found_12411007 = True
+                    logger.info(f"  ✅ FOUND in FCTC data at index {idx}:")
+                    logger.info(f"     PRN (RAW): '{record.get('PRN_RAW', 'N/A')}'")
+                    logger.info(f"     PRN (CLEAN): '{record.get('PRN_CLEAN', 'N/A')}'")
+                    logger.info(f"     Name: '{record.get('Full_Name_CLEAN', 'N/A')}'")
+                    logger.info(f"     Roll (RAW): '{record.get('Roll_Number_RAW', 'N/A')}'")
+                    logger.info(f"     Roll (CLEAN): '{record.get('Roll_Number_CLEAN', 'N/A')}'")
+                    logger.info(f"     Division (RAW): '{record.get('Division_RAW', 'N/A')}'")
+                    logger.info(f"     Division (CLEAN): '{record.get('Division_CLEAN', 'N/A')}'")
+                    logger.info(f"     Score: {record.get('Score', 'N/A')}")
+                    logger.info(f"     College: '{record.get('College_Name', 'N/A')}'")
+                    logger.info(f"     Is in PRN lookup? {'12411007' in fctc_lookup_by_prn}")
+                    break
+            
+            if not found_12411007:
+                logger.warning(f"  ❌ PRN 12411007 NOT FOUND in FCTC data!")
+                # Search by name instead
+                logger.info(f"  🔍 Searching by name 'YELMAR' or 'SUMIT' or 'BAPURAO':")
+                found_count = 0
+                for idx, record in enumerate(fctc_data):
+                    name = record.get('Full_Name_CLEAN', '')
+                    if 'YELMAR' in name or ('SUMIT' in name and 'BAPURAO' in name):
+                        found_count += 1
+                        logger.info(f"     Found at index {idx}: {name}")
+                        logger.info(f"       PRN (RAW): '{record.get('PRN_RAW', 'EMPTY')}'")
+                        logger.info(f"       PRN (CLEAN): '{record.get('PRN_CLEAN', 'EMPTY')}'")
+                        logger.info(f"       Roll: {record.get('Roll_Number_CLEAN', 'N/A')}")
+                        logger.info(f"       Division: {record.get('Division_CLEAN', 'N/A')}")
+                        logger.info(f"       Score: {record.get('Score', 'N/A')}")
+                        if found_count >= 5:  # Limit to first 5 matches
+                            logger.info(f"     ... (showing first 5 matches only)")
+                            break
+                
+                if found_count == 0:
+                    logger.warning(f"  ❌ No students found with name containing 'YELMAR' or 'SUMIT BAPURAO'")
+                    logger.info(f"  🔍 Checking students with EMPTY PRNs (first 10):")
+                    empty_prn_count = 0
+                    for idx, record in enumerate(fctc_data):
+                        if not record.get('PRN_CLEAN', ''):
+                            empty_prn_count += 1
+                            if empty_prn_count <= 10:
+                                logger.info(f"     Index {idx}: {record.get('Full_Name_CLEAN', 'N/A')[:40]}")
+                                logger.info(f"       Roll: {record.get('Roll_Number_CLEAN', 'N/A')}, Div: {record.get('Division_CLEAN', 'N/A')}")
+                    logger.info(f"  Total students with empty PRN: {empty_prn_count}")
+            logger.info("")
             
             # DEBUG: Show sample keys from each lookup dictionary
             if fctc_lookup_by_prn:
@@ -1060,7 +1230,10 @@ If none of these solutions work, the original file may be irreparably corrupted.
             # Track matching statistics
             match_stats = {
                 'prn_matches': 0,
+                'prn_with_wrong_roll': 0,  # PRN matched but roll number was wrong
+                'prn_rejected_name_mismatch': 0,  # NEW: PRN matched but name too different
                 'roll_div_matches': 0,
+                'roll_div_rejected_name_mismatch': 0,  # NEW: Roll+Div matched but name too different
                 'exact_name_matches': 0,
                 'fuzzy_name_matches': 0,
                 'no_match': 0
@@ -1100,31 +1273,68 @@ If none of these solutions work, the original file may be irreparably corrupted.
                 
                 matched_record = None
                 match_method = "Not_Found"
+                use_roll_call_roll_number = False  # Flag to use correct roll number from roll call
                 
-                # INTELLIGENT MATCHING LOGIC
+                # INTELLIGENT MATCHING LOGIC - VIT STUDENTS ONLY
+                # Priority: PRN First → Roll+Div → Name → Absent
                 
-                # Step 1: IF VIT student AND PRN exists, try PRN match first
-                if prn and self._is_vit_student(prn, college):
+                # Step 1: Try PRN match first (all students are VIT students)
+                if prn:
                     if prn in fctc_lookup_by_prn:
                         matched_record = fctc_lookup_by_prn[prn]
-                        match_method = "PRN"
-                        match_stats['prn_matches'] += 1
                         
-                        # Check if Roll+Div also matches (for validation)
-                        roll_div_key = f"{roll_no}_{division}"
-                        if roll_div_key in fctc_lookup_by_roll_div:
-                            matched_by_roll = fctc_lookup_by_roll_div[roll_div_key]
-                            # If PRN doesn't match but Roll+Div does, log mismatch
-                            if matched_by_roll['PRN_CLEAN'] != prn:
+                        # SAFETY CHECK: Verify name similarity after PRN match
+                        fctc_name = matched_record['Full_Name_CLEAN']
+                        name_similarity_score = self._calculate_name_similarity(roll_name, fctc_name)
+                        
+                        # Require at least 50% name similarity for PRN match
+                        # (Lowered from 60% to handle name order variations and minor spelling differences)
+                        if name_similarity_score >= 0.5:
+                            match_method = "PRN"
+                            match_stats['prn_matches'] += 1
+                            division_match_tracker[division]['matched'] += 1
+                            
+                            # Check if Roll+Div also matches (validation)
+                            roll_div_key = f"{roll_no}_{division}"
+                            fctc_roll_from_exam = matched_record['Roll_Number_CLEAN']
+                            fctc_div_from_exam = matched_record['Division_CLEAN']
+                            
+                            # If student entered wrong roll number in exam
+                            if fctc_roll_from_exam != roll_no or fctc_div_from_exam != division:
+                                # Log the mismatch
+                                logger.warning(f"⚠️ PRN Match with Wrong Roll Number:")
+                                logger.warning(f"   PRN: {prn}")
+                                logger.warning(f"   Name Similarity: {name_similarity_score:.1%}")
+                                logger.warning(f"   Correct Roll (from Roll Call): {roll_no}")
+                                logger.warning(f"   Wrong Roll (entered in exam): {fctc_roll_from_exam}")
+                                logger.warning(f"   Correct Division: {division}")
+                                logger.warning(f"   Division in exam: {fctc_div_from_exam}")
+                                logger.warning(f"   → Using CORRECT roll number from Roll Call in report")
+                                
+                                # Use correct roll number from roll call
+                                use_roll_call_roll_number = True
+                                match_stats['prn_with_wrong_roll'] += 1
+                                
+                                # Log to mismatch log
                                 self._log_prn_mismatch(
-                                    prn, 
-                                    matched_by_roll['PRN_CLEAN'],
-                                    roll_no,
+                                    prn,
+                                    prn,  # Same PRN
+                                    f"{roll_no} (correct) vs {fctc_roll_from_exam} (entered)",
                                     division,
-                                    "Roll+Div"
+                                    "PRN_Match_Wrong_Roll"
                                 )
+                        else:
+                            # PRN matched but name is too different - reject match
+                            logger.warning(f"⚠️ PRN Match REJECTED due to name mismatch:")
+                            logger.warning(f"   PRN: {prn}")
+                            logger.warning(f"   Roll Call Name: {roll_name}")
+                            logger.warning(f"   FCTC Name: {fctc_name}")
+                            logger.warning(f"   Name Similarity: {name_similarity_score:.1%} (< 50% threshold)")
+                            logger.warning(f"   → Marking as Absent (possible wrong PRN entered)")
+                            match_stats['prn_rejected_name_mismatch'] += 1
+                            matched_record = None  # Reject this match
                 
-                # Step 2: Try Roll Number + Division (PRIMARY universal identifier)
+                # Step 2: If PRN not found, try Roll Number + Division
                 if not matched_record and roll_no and division:
                     key = f"{roll_no}_{division}"
                     
@@ -1202,19 +1412,46 @@ If none of these solutions work, the original file may be irreparably corrupted.
                     
                     if key in fctc_lookup_by_roll_div:
                         matched_record = fctc_lookup_by_roll_div[key]
-                        match_method = "Roll+Div"
-                        match_stats['roll_div_matches'] += 1
-                        division_match_tracker[division]['matched'] += 1
                         
-                        # If PRN was provided but didn't match, log it
-                        if prn and matched_record['PRN_CLEAN'] and matched_record['PRN_CLEAN'] != prn:
-                            self._log_prn_mismatch(
-                                prn,
-                                matched_record['PRN_CLEAN'],
-                                roll_no,
-                                division,
-                                "Roll+Div"
-                            )
+                        # SAFETY CHECK: Verify name similarity after Roll+Div match
+                        fctc_name = matched_record['Full_Name_CLEAN']
+                        name_similarity_score = self._calculate_name_similarity(roll_name, fctc_name)
+                        
+                        # DEBUG: Log Roll 3 matching details
+                        if roll_no == "3" and division == "CSL":
+                            logger.warning(f"🔍 DEBUG: Roll 3 CSL matching attempt:")
+                            logger.warning(f"   Roll Call Name: '{roll_name}'")
+                            logger.warning(f"   FCTC Name: '{fctc_name}'")
+                            logger.warning(f"   Name Similarity: {name_similarity_score:.1%}")
+                            logger.warning(f"   Roll Call PRN: '{prn}'")
+                            logger.warning(f"   FCTC PRN: '{matched_record['PRN_CLEAN']}'")
+                        
+                        # Require at least 50% name similarity for Roll+Div match
+                        # (Lowered from 60% to handle name order variations and minor spelling differences)
+                        if name_similarity_score >= 0.5:
+                            match_method = "Roll+Div"
+                            match_stats['roll_div_matches'] += 1
+                            division_match_tracker[division]['matched'] += 1
+                            
+                            # If PRN was provided but didn't match, log it
+                            if prn and matched_record['PRN_CLEAN'] and matched_record['PRN_CLEAN'] != prn:
+                                self._log_prn_mismatch(
+                                    prn,
+                                    matched_record['PRN_CLEAN'],
+                                    roll_no,
+                                    division,
+                                    "Roll+Div"
+                                )
+                        else:
+                            # Roll+Div matched but name is too different - reject match
+                            logger.warning(f"⚠️ Roll+Div Match REJECTED due to name mismatch:")
+                            logger.warning(f"   Roll+Division: {roll_no}+{division}")
+                            logger.warning(f"   Roll Call Name: {roll_name}")
+                            logger.warning(f"   FCTC Name: {fctc_name}")
+                            logger.warning(f"   Name Similarity: {name_similarity_score:.1%} (< 50% threshold)")
+                            logger.warning(f"   → Trying name matching instead (possible wrong roll entered)")
+                            match_stats['roll_div_rejected_name_mismatch'] += 1
+                            matched_record = None  # Reject this match, continue to name matching
                 
                 # Step 3: Try Exact Full Name match (within same division)
                 if not matched_record and roll_name and division:
@@ -1289,9 +1526,10 @@ If none of these solutions work, the original file may be irreparably corrupted.
                     match_stats['no_match'] += 1
                 
                 # Add to division report
+                # Use correct roll number from Roll Call (not the wrong one from FCTC exam)
                 divisions[division].append({
                     'PRN': roll_record['PRN_RAW'] if roll_record['PRN_RAW'] else 'N/A',
-                    'Roll_No': roll_record['Roll_No_RAW'],
+                    'Roll_No': roll_record['Roll_No_RAW'],  # Always use Roll Call's roll number (correct one)
                     'Full_Name': roll_record['Full_Name_RAW'],
                     'Division': roll_record['Division_RAW'],
                     'Attendance_Status': status,
@@ -1326,8 +1564,11 @@ If none of these solutions work, the original file may be irreparably corrupted.
                         logger.warning(f"     Divisions found in FCTC: {sorted(all_divs_in_fctc)}")
             
             logger.info(f"🎯 Matching Statistics:")
-            logger.info(f"  ✓ PRN matches (VIT only): {match_stats['prn_matches']}")
-            logger.info(f"  ✓ Roll+Division matches (PRIMARY): {match_stats['roll_div_matches']}")
+            logger.info(f"  ✓ PRN matches: {match_stats['prn_matches']}")
+            logger.info(f"    ⚠️ PRN matched but wrong roll number: {match_stats['prn_with_wrong_roll']}")
+            logger.info(f"    ❌ PRN matched but name mismatch (rejected): {match_stats['prn_rejected_name_mismatch']}")
+            logger.info(f"  ✓ Roll+Division matches: {match_stats['roll_div_matches']}")
+            logger.info(f"    ❌ Roll+Div matched but name mismatch (rejected): {match_stats['roll_div_rejected_name_mismatch']}")
             logger.info(f"  ✓ Exact Name matches: {match_stats['exact_name_matches']}")
             logger.info(f"  ✓ Fuzzy Name matches: {match_stats['fuzzy_name_matches']}")
             logger.info(f"  ✗ No match (Absent): {match_stats['no_match']}")
@@ -1369,12 +1610,12 @@ If none of these solutions work, the original file may be irreparably corrupted.
                 'prn_mismatch_log': self.mismatch_log,
                 'reports': {
                     'files_created': [f'attendance_report_division_{div}.csv' for div in divisions.keys()],
-                    'summary': f"Processed {total_matched} matched students across {len(divisions)} divisions using intelligent college-aware matching"
+                    'summary': f"Processed {total_matched} matched students across {len(divisions)} divisions using PRN-first VIT matching pipeline"
                 }
             }
             
             return result
             
         except Exception as e:
-            logger.error(f"Error in intelligent matching processing: {str(e)}")
-            raise Exception(f"Error in intelligent matching processing: {str(e)}")
+            logger.error(f"Error in VIT PRN-first matching processing: {str(e)}")
+            raise Exception(f"Error in VIT PRN-first matching processing: {str(e)}")
